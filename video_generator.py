@@ -9,6 +9,7 @@ from typing import Callable
 import asyncio
 
 import edge_tts
+import numpy as np
 from anthropic import Anthropic
 from gtts import gTTS
 
@@ -88,6 +89,75 @@ def _rounded_rect(draw, xy, radius, fill, outline=None, width=0):
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
 
+def _draw_star(draw, center, radius, fill, points=5):
+    import math
+    cx, cy = center
+    pts = []
+    for i in range(points * 2):
+        r = radius if i % 2 == 0 else radius * 0.45
+        angle = math.pi / 2 + i * math.pi / points
+        pts.append((cx + r * math.cos(angle), cy - r * math.sin(angle)))
+    draw.polygon(pts, fill=fill)
+
+
+def _draw_sparkle(draw, center, radius, fill):
+    cx, cy = center
+    pts = [
+        (cx, cy - radius),
+        (cx + radius * 0.25, cy - radius * 0.25),
+        (cx + radius, cy),
+        (cx + radius * 0.25, cy + radius * 0.25),
+        (cx, cy + radius),
+        (cx - radius * 0.25, cy + radius * 0.25),
+        (cx - radius, cy),
+        (cx - radius * 0.25, cy - radius * 0.25),
+    ]
+    draw.polygon(pts, fill=fill)
+
+
+def _draw_checkmark(draw, center, size, color, thickness=8):
+    cx, cy = center
+    s = size
+    draw.line([(cx - s * 0.5, cy + s * 0.05), (cx - s * 0.1, cy + s * 0.45)], fill=color, width=thickness)
+    draw.line([(cx - s * 0.1, cy + s * 0.45), (cx + s * 0.55, cy - s * 0.4)], fill=color, width=thickness)
+
+
+def _draw_question_mark(draw, center, size, color, font_size=None):
+    cx, cy = center
+    fs = font_size or int(size * 1.4)
+    f = _font(fs)
+    w = draw.textlength("?", font=f)
+    draw.text((cx - w / 2, cy - fs * 0.6), "?", font=f, fill=color)
+
+
+def _draw_thinking_bubble(draw, center, radius, fill):
+    cx, cy = center
+    draw.ellipse((cx - radius, cy - radius * 0.6, cx + radius, cy + radius * 0.6), fill=fill)
+    small_r = radius * 0.25
+    draw.ellipse(
+        (cx - radius - small_r * 1.8, cy + radius * 0.5, cx - radius - small_r * 0.4, cy + radius * 0.5 + small_r * 1.4),
+        fill=fill,
+    )
+    draw.ellipse(
+        (cx - radius - small_r * 2.8, cy + radius * 1.1, cx - radius - small_r * 2.0, cy + radius * 1.1 + small_r * 0.8),
+        fill=fill,
+    )
+
+
+def _draw_party_burst(draw, center, radius, colors):
+    import math
+    cx, cy = center
+    for i in range(10):
+        angle = i * math.pi / 5
+        x1 = cx + math.cos(angle) * radius * 0.45
+        y1 = cy + math.sin(angle) * radius * 0.45
+        x2 = cx + math.cos(angle) * radius
+        y2 = cy + math.sin(angle) * radius
+        col = colors[i % len(colors)]
+        draw.line([(x1, y1), (x2, y2)], fill=col, width=6)
+    draw.ellipse((cx - radius * 0.35, cy - radius * 0.35, cx + radius * 0.35, cy + radius * 0.35), fill=colors[0])
+
+
 def _draw_confetti(draw, palette, n=40, seed=0):
     rng = random.Random(seed)
     colors = [palette["accent"], palette["good"], (255, 255, 255), palette["fg"]]
@@ -163,9 +233,28 @@ def render_question(scene, palette, save_path, reveal=False) -> Path:
 
     _rounded_rect(draw, (60, 40, VIDEO_W - 60, 130), 25, palette["accent"])
     qnum = scene.get("question_number", "Question")
-    label = f"❓ {qnum}" if not reveal else f"✅ Answer"
-    w = draw.textlength(label, font=_font(46))
-    draw.text(((VIDEO_W - w) / 2, 60), label, font=_font(46), fill=(255, 255, 255))
+    label = qnum if not reveal else "Answer"
+    label_font = _font(46)
+    text_w = draw.textlength(label, font=label_font)
+    icon_size = 50
+    gap = 18
+    total_w = icon_size + gap + text_w
+    icon_cx = int((VIDEO_W - total_w) / 2 + icon_size / 2)
+    icon_cy = 60 + 23
+    text_x = icon_cx + icon_size / 2 + gap
+    if reveal:
+        draw.ellipse(
+            (icon_cx - icon_size / 2, icon_cy - icon_size / 2, icon_cx + icon_size / 2, icon_cy + icon_size / 2),
+            fill=(255, 255, 255),
+        )
+        _draw_checkmark(draw, (icon_cx, icon_cy), icon_size * 0.7, palette["good"], thickness=8)
+    else:
+        draw.ellipse(
+            (icon_cx - icon_size / 2, icon_cy - icon_size / 2, icon_cx + icon_size / 2, icon_cy + icon_size / 2),
+            fill=(255, 255, 255),
+        )
+        _draw_question_mark(draw, (icon_cx, icon_cy), icon_size * 0.7, palette["accent"], font_size=44)
+    draw.text((text_x, 60), label, font=label_font, fill=(255, 255, 255))
 
     sentence = scene["sentence"]
     correct = scene.get("correct_option", "")
@@ -226,9 +315,16 @@ def render_think(scene, palette, save_path, number: int) -> Path:
     img = Image.new("RGB", (VIDEO_W, VIDEO_H), color=palette["bg"])
     draw = ImageDraw.Draw(img)
     _draw_confetti(draw, palette, n=30, seed=10 + number)
-    label = "🤔 Think!"
-    w = draw.textlength(label, font=_font(80))
-    draw.text(((VIDEO_W - w) / 2, 120), label, font=_font(80), fill=palette["fg"])
+    label = "Think!"
+    label_font = _font(80)
+    text_w = draw.textlength(label, font=label_font)
+    bubble_r = 50
+    gap = 25
+    total_w = bubble_r * 2 + gap + text_w
+    bubble_cx = int((VIDEO_W - total_w) / 2 + bubble_r)
+    bubble_cy = 165
+    _draw_thinking_bubble(draw, (bubble_cx, bubble_cy), bubble_r, palette["accent"])
+    draw.text((bubble_cx + bubble_r + gap, 120), label, font=label_font, fill=palette["fg"])
     big = str(number)
     bf = _font(280)
     bw = draw.textlength(big, font=bf)
@@ -245,9 +341,21 @@ def render_recap(scene, palette, save_path) -> Path:
     draw = ImageDraw.Draw(img)
     _draw_confetti(draw, palette, n=50, seed=2)
     _rounded_rect(draw, (80, 80, VIDEO_W - 80, 180), 30, palette["good"])
-    title = "🎉 " + scene.get("heading", "Great job!")
-    w = draw.textlength(title, font=_font(54))
-    draw.text(((VIDEO_W - w) / 2, 100), title, font=_font(54), fill=(255, 255, 255))
+    title = scene.get("heading", "Great job!")
+    title_font = _font(54)
+    text_w = draw.textlength(title, font=title_font)
+    burst_r = 38
+    gap = 22
+    total_w = burst_r * 2 + gap + text_w
+    burst_cx = int((VIDEO_W - total_w) / 2 + burst_r)
+    burst_cy = 130
+    _draw_party_burst(
+        draw,
+        (burst_cx, burst_cy),
+        burst_r,
+        [(255, 235, 100), (255, 180, 80), (255, 120, 120), (140, 200, 255), (200, 140, 255)],
+    )
+    draw.text((burst_cx + burst_r + gap, 100), title, font=title_font, fill=(255, 255, 255))
     bullets = scene.get("bullets", [])[:4]
     n = max(1, len(bullets))
     available_h = VIDEO_H - 250
@@ -353,6 +461,68 @@ def build_clip(image_path: Path, audio_path: Path | None, min_duration: float = 
     else:
         clip = ImageClip(str(image_path)).set_duration(min_duration)
     return clip.resize((VIDEO_W, VIDEO_H))
+
+
+def build_ken_burns_clip(
+    image_path: Path,
+    audio_path: Path | None,
+    min_duration: float = 3.0,
+    zoom_start: float = 1.0,
+    zoom_end: float = 1.12,
+    pan_x_pct: float = 0.0,
+    pan_y_pct: float = 0.0,
+) -> ImageClip:
+    """Image clip with slow zoom + optional pan. Renders the image larger and crops
+    a moving viewport over time, which avoids MoviePy's per-frame resize cost.
+    """
+    if audio_path is not None:
+        audio = AudioFileClip(str(audio_path))
+        duration = max(audio.duration + 0.4, min_duration)
+    else:
+        audio = None
+        duration = min_duration
+
+    pil_img = Image.open(str(image_path)).convert("RGB")
+    src_w, src_h = pil_img.size
+    target_aspect = VIDEO_W / VIDEO_H
+    src_aspect = src_w / src_h
+    if src_aspect > target_aspect:
+        new_h = src_h
+        new_w = int(new_h * target_aspect)
+    else:
+        new_w = src_w
+        new_h = int(new_w / target_aspect)
+    left = (src_w - new_w) // 2
+    top = (src_h - new_h) // 2
+    pil_img = pil_img.crop((left, top, left + new_w, top + new_h))
+
+    scale_factor = max(zoom_start, zoom_end) * 1.05
+    big_w = int(VIDEO_W * scale_factor)
+    big_h = int(VIDEO_H * scale_factor)
+    big_img = pil_img.resize((big_w, big_h), Image.LANCZOS)
+    big_arr = np.array(big_img)
+
+    def make_frame(t):
+        progress = 0.0 if duration <= 0 else min(max(t / duration, 0.0), 1.0)
+        zoom = zoom_start + (zoom_end - zoom_start) * progress
+        crop_w = int(VIDEO_W * (scale_factor / zoom))
+        crop_h = int(VIDEO_H * (scale_factor / zoom))
+        max_x = big_w - crop_w
+        max_y = big_h - crop_h
+        center_x = max_x // 2 + int(max_x * pan_x_pct * (progress - 0.5))
+        center_y = max_y // 2 + int(max_y * pan_y_pct * (progress - 0.5))
+        x0 = max(0, min(center_x, max_x))
+        y0 = max(0, min(center_y, max_y))
+        frame = big_arr[y0:y0 + crop_h, x0:x0 + crop_w]
+        if frame.shape[0] != VIDEO_H or frame.shape[1] != VIDEO_W:
+            frame = np.array(Image.fromarray(frame).resize((VIDEO_W, VIDEO_H), Image.LANCZOS))
+        return frame
+
+    from moviepy.editor import VideoClip
+    clip = VideoClip(make_frame, duration=duration)
+    if audio is not None:
+        clip = clip.set_audio(audio)
+    return clip
 
 
 def generate_video(
